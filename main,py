@@ -1,0 +1,95 @@
+from uarm.wrapper import SwiftAPI
+from pyuarm import UArm
+import serial
+
+
+import time
+
+swift = SwiftAPI(port="COM3")  
+
+swift.waiting_ready()
+print(swift.get_device_info())  
+
+speed=100
+
+# Initial Position
+swift.set_position(250, 0, 173, speed=speed) 
+
+
+from scipy.interpolate import RBFInterpolator
+import numpy as np
+
+# Camera and robot end effector datas.
+camera = np.array([
+    [6, 88], [5, 38], [78, 12], [110, 22], [154, 45],
+    [153, 84], [146, 87], [78, 113], [77, 85], [9, 111],
+    [14, 89], [50, 63], [45, 94], [116, 97], [136, 58],
+    [30, 64], [101, 94], [130, 37], [95, 70] , [88, 103],
+    [6, 51], [8, 60],[11,114],[38,105],[96,100],[152,94],[129,114],[29,44],[20,81],[125,52],[48,108]
+    ,[113,110],[16,42]
+])
+robot = np.array([
+    [130, 235], [125, 235], [0, 360], [-50, 340], [-120, 310],
+    [-145, 240], [-125, 230], [0, 78], [0, 250], [125, 185],
+    [110, 245], [35, 290], [50, 240], [-66, 230], [-100, 293],
+    [70, 290]  , [-40, 237], [-90, 325] , [-30, 280]  , [-15, 225],
+    [130, 305] , [120, 285],[135,160],[65,210],[-30,220],[-150,210],[-90,160],[75,315],[90,250],[-75,295],[50,200]
+    ,[-65,185],[100,320]
+])
+
+# Model
+rbf_model = RBFInterpolator(kamera, robot)
+
+def camera_to_robot(u, v):
+    prediction = rbf_model([[u, v]])
+    return tuple(np.round(prediction[0], 2))
+
+
+ser = serial.Serial('COM4', 9600, timeout=1)
+
+found_and_moved = False  
+
+while not found_and_moved:
+    line = ""
+
+    if ser.in_waiting:
+        line = ser.readline().decode('utf-8', errors='ignore').strip()
+        print("🔴 Box Location:", line)
+
+        if "X:-1" not in line and "Y:-1" not in line:
+            print("✅ RED OBSERVED")
+            try:
+                parts = line.split()
+                x = int(parts[0].split(":")[1])
+                y = int(parts[1].split(":")[1])
+                                
+                x,y= kamera_to_robot(x, y)
+                
+                print(x,y)
+                
+                swift.set_position(y, x, 28, speed=speed)
+            
+                swift.set_pump(True)
+                print("Box taken!")
+                time.sleep(1)
+                
+                swift.set_position(200, 0, 100, speed=speed) 
+                                         
+                swift.set_position(1, 101, 30, speed=speed)
+                time.sleep(1)
+                
+                swift.set_pump(False)
+                print("Box delivered!")
+                time.sleep(1)
+                
+                swift.set_position(250, 0, 173, speed=speed) 
+
+                found_and_moved = True
+                print("🟢 Robot reach the target location.")
+                break
+
+            except (IndexError, ValueError):
+                print("⚠ Error")
+
+ser.close()
+swift.disconnect()
